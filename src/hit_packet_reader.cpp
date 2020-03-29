@@ -1,5 +1,7 @@
 #include "hit_packet_reader.h"
 
+#include <array>
+#include <cartographer/common/time.h>
 #include <cassert>
 #include <climits>
 #include <istream>
@@ -8,189 +10,159 @@
 
 #include <boost/endian/conversion.hpp>
 
-HitPacketReader::HitPacketReader(std::istream &istream)
-    : istream_ptr_(&istream) {}
+using std::array;
+using std::istream;
+using std::optional;
+using std::pair;
+using std::runtime_error;
+using std::streamsize;
+using std::uint16_t;
+using std::uint32_t;
+using std::uint64_t;
+using std::uint8_t;
 
-hit_packet_reader::Iterator HitPacketReader::begin() noexcept {
-  return hit_packet_reader::Iterator(*this);
-}
+namespace chrono = std::chrono;
+using chrono::microseconds;
+using chrono::seconds;
 
-hit_packet_reader::Iterator HitPacketReader::end() noexcept {
-  return hit_packet_reader::Iterator();
-}
+namespace endian = boost::endian;
 
-namespace hit_packet_reader {
+namespace common = cartographer::common;
+using common::Time;
 
-Iterator::reference Iterator::operator*() const {
-  if (!parent_ptr_) {
-    throw std::logic_error("hit_packet_reader::Iterator::operator*: cannot "
-                           "dereference a past-the-end-iterator");
-  }
+namespace sensor = cartographer::sensor;
+using sensor::PointCloudWithIntensities;
+using sensor::TimedPointCloudData;
+using sensor::TimedRangefinderPoint;
 
-  return current_;
-}
+using Eigen::Vector3f;
 
-Iterator::pointer Iterator::operator->() const {
-  if (!parent_ptr_) {
-    throw std::logic_error("hit_packet_reader::Iterator::operator->: cannot "
-                           "dereference a past-the-end-iterator");
-  }
-
-  return &current_;
-}
-
-Iterator &Iterator::operator++() {
-  if (!parent_ptr_) {
-    throw std::logic_error("hit_packet_reader::Iterator::operator++(): cannot "
-                           "increment a past-the-end-iterator");
-  }
-
-  deserialize_packet();
-
-  return *this;
-}
-
-Iterator Iterator::operator++(int) {
-  if (!parent_ptr_) {
-    throw std::logic_error(
-        "hit_packet_reader::Iterator::operator++(int): cannot "
-        "increment a past-the-end-iterator");
-  }
-
-  const Iterator ret(MoveTag(), *this);
-
-  ++*this;
-
-  return ret;
-}
-
-bool operator==(const Iterator &lhs, const Iterator &rhs) noexcept {
-  return lhs.parent_ptr_ == rhs.parent_ptr_;
-}
-
-bool operator!=(const Iterator &lhs, const Iterator &rhs) noexcept {
-  return lhs.parent_ptr_ != rhs.parent_ptr_;
-}
-
-Iterator::Iterator(HitPacketReader &parent) noexcept : parent_ptr_(&parent) {
-  deserialize_packet();
-}
-
-Iterator::Iterator(MoveTag, Iterator &iterator) noexcept
-    : parent_ptr_(iterator.parent_ptr_),
-      current_(std::move(iterator.current_)) {}
+namespace {
 
 constexpr auto &ERR_INCOMPLETE_PACKET =
-    "hit_packet_reader::Iterator::deserialize_packet: incomplete packet";
+    "HitPacketReader::deserialize_packet: incomplete packet";
 
-template <typename T> static T deserialize_integer(std::istream &istream) {
-  T integer;
+struct Impl {
+  optional<TimedPointCloudData> deserialize_packet() {
+    static_assert(sizeof(uint8_t) == 1,
+                  "std::uint8_t must have the same size as char");
+    static_assert(CHAR_BIT == 8, "char must be 8 bits");
 
-  if (!istream.read(reinterpret_cast<char *>(&integer),
-                    static_cast<std::streamsize>(sizeof(T)))) {
-    throw std::runtime_error(ERR_INCOMPLETE_PACKET);
-  }
-
-  boost::endian::little_to_native_inplace(integer);
-
-  return integer;
-}
-
-static float deserialize_position(std::istream &istream) {
-  static constexpr std::uint16_t MAX_POSITION = 40000;
-
-  const auto as_fixed_point = deserialize_integer<std::uint16_t>(istream);
-
-  if (as_fixed_point > MAX_POSITION) {
-    throw std::runtime_error("hit_packet_reader::Iterator::deserialize_packet: "
-                             "hit position out of range");
-  }
-
-  return static_cast<float>((static_cast<double>(as_fixed_point) / 200.0) -
-                            100.0);
-}
-
-void Iterator::deserialize_packet() try {
-  static_assert(sizeof(std::uint8_t) == 1,
-                "uint8_t must have the same size as char");
-  static_assert(CHAR_BIT == 8, "char must be 8 bits");
-
-  static constexpr auto &HEADER_MAGIC = "\x9C\xAD\x9C\xAD\x9C\xAD\x9C\xAD";
-
-  assert(parent_ptr_);
-
-  std::uint8_t magic[sizeof(HEADER_MAGIC)];
-
-  if (!parent_ptr_->istream_ptr_->read(
-          &reinterpret_cast<char &>(magic),
-          static_cast<std::streamsize>(sizeof(magic)))) {
-    if (parent_ptr_->istream_ptr_->gcount() > 0) {
-      throw std::runtime_error(ERR_INCOMPLETE_PACKET);
+    if (!is) {
+      return std::nullopt;
     }
 
-    parent_ptr_ = nullptr;
-    current_ = value_type();
+    static constexpr array<uint8_t, 8> HEADER_MAGIC = {
+        {0x9C, 0xAD, 0x9C, 0xAD, 0x9C, 0xAD, 0x9C, 0xAD}};
+    array<uint8_t, HEADER_MAGIC.size()> magic;
 
-    return;
-  }
+    if (!is.read(reinterpret_cast<char *>(magic.data()),
+                 static_cast<streamsize>(magic.size()))) {
+      if (is.gcount() > 0) {
+        throw runtime_error(ERR_INCOMPLETE_PACKET);
+      }
 
-  if (!std::equal(std::cbegin(magic), std::cend(magic), HEADER_MAGIC)) {
-    throw std::runtime_error("hit_packet_reader::Iterator::deserialize_packet: "
-                             "packet header magic number did not match");
-  }
-
-  const auto num_hits =
-      deserialize_integer<std::uint32_t>(*parent_ptr_->istream_ptr_);
-
-  if (num_hits > 384) {
-    throw std::runtime_error("hit_packet_reader::Iterator::deserialize_packet: "
-                             "packet header indicated more than 384 hits");
-  }
-
-  // microseconds
-  const auto utime =
-      deserialize_integer<std::uint64_t>(*parent_ptr_->istream_ptr_);
-
-  if (!parent_ptr_->istream_ptr_->ignore(4)) {
-    throw std::runtime_error(ERR_INCOMPLETE_PACKET);
-  }
-
-  current_.points.clear();
-  current_.intensities.clear();
-
-  current_.points.reserve(
-      static_cast<decltype(current_.points)::size_type>(num_hits));
-  current_.intensities.reserve(
-      static_cast<decltype(current_.intensities)::size_type>(num_hits));
-
-  for (std::uint32_t i = 0; i < num_hits; ++i) {
-    static constexpr std::uint8_t MAX_ID = 31;
-
-    const float x = deserialize_position(*parent_ptr_->istream_ptr_);
-    const float y = deserialize_position(*parent_ptr_->istream_ptr_);
-    const float z = deserialize_position(*parent_ptr_->istream_ptr_);
-    const float intensity =
-        static_cast<float>(
-            deserialize_integer<std::uint8_t>(*parent_ptr_->istream_ptr_)) /
-        static_cast<float>(UINT8_MAX);
-
-    const auto id =
-        deserialize_integer<std::uint8_t>(*parent_ptr_->istream_ptr_);
-
-    if (id > MAX_ID) {
-      throw std::logic_error("hit_packet_reader::Iterator::deserialize_packet: "
-                             "hit id out of range");
+      return std::nullopt;
     }
 
-    current_.points.push_back(
-        cartographer::sensor::TimedRangefinderPoint{{x, y, z}, 0.0f});
-    current_.intensities.push_back(intensity);
+    if (magic != HEADER_MAGIC) {
+      throw runtime_error("HitPacketReader::deserialize_packet: packet header "
+                          "magic number did not match");
+    }
+
+    static constexpr uint32_t MAX_NUM_HITS = 384;
+    const auto num_hits = deserialize_integer<uint32_t>();
+
+    if (num_hits > MAX_NUM_HITS) {
+      throw runtime_error("HitPacketReader::deserialize_packet: packet "
+                          "header indicated more than 384 hits");
+    }
+
+    auto result = std::make_optional<TimedPointCloudData>();
+    auto &[time, origin, ranges] = *result;
+
+    // microseconds
+    const microseconds since_unix_epoch(deserialize_integer<uint64_t>());
+    time = Time(since_unix_epoch +
+                seconds(common::kUtsEpochOffsetFromUnixEpochInSeconds));
+
+    static constexpr streamsize HEADER_PADDING_SIZE = 4;
+    ignore(HEADER_PADDING_SIZE);
+
+    ranges.reserve(static_cast<decltype(ranges)::size_type>(num_hits));
+
+    for (uint32_t i = 0; i < num_hits; ++i) {
+      static constexpr uint8_t MAX_ID = 31;
+      static constexpr streamsize INTENSITY_SIZE = 1;
+
+      // velodyne coordinate frame is x-right, y-back, z-down
+      // convert to ENU coordinate frame: x-forward, y-left, z-up
+      const float y = -deserialize_position();
+      const float x = -deserialize_position();
+      const float z = -deserialize_position();
+      ignore(INTENSITY_SIZE);
+      const auto id = deserialize_integer<uint8_t>();
+
+      if (id > MAX_ID) {
+        throw runtime_error(
+            "HitPacketReader::deserialize_packet: hit id out of range");
+      }
+
+      ranges.push_back(TimedRangefinderPoint{Vector3f{x, y, z}, 0.0f});
+    }
+
+    origin = this->origin;
+
+    return result;
   }
-} catch (...) {
-  parent_ptr_ = nullptr;
-  current_ = value_type();
 
-  throw;
+  istream &is;
+  const Eigen::Vector3f &origin;
+
+private:
+  template <typename T> T deserialize_integer() {
+    T integer;
+
+    if (!is.read(reinterpret_cast<char *>(&integer),
+                 static_cast<streamsize>(sizeof(T)))) {
+      throw runtime_error(ERR_INCOMPLETE_PACKET);
+    }
+
+    endian::little_to_native_inplace(integer);
+
+    return integer;
+  }
+
+  float deserialize_position() {
+    static constexpr uint16_t MAX_POSITION = 40000;
+    static constexpr double RESOLUTION = 0.005; // meters
+    static constexpr double OFFSET = 100.0;     // meters
+
+    const auto as_fixed_point = deserialize_integer<uint16_t>();
+
+    if (as_fixed_point > MAX_POSITION) {
+      throw runtime_error(
+          "HitPacketReader::deserialize_packet: hit position out of range");
+    }
+
+    return static_cast<float>(
+        (static_cast<double>(as_fixed_point) * RESOLUTION) - OFFSET);
+  }
+
+  void ignore(streamsize n) {
+    if (!is.ignore(n)) {
+      throw runtime_error(ERR_INCOMPLETE_PACKET);
+    }
+  }
+};
+
+} // namespace
+
+HitPacketReader::HitPacketReader(istream &is, const Vector3f &origin)
+    : is_ptr_(&is), origin_(origin) {}
+
+optional<TimedPointCloudData> HitPacketReader::deserialize_packet() {
+  assert(is_ptr_);
+
+  return Impl{*is_ptr_, origin_}.deserialize_packet();
 }
-
-} // namespace hit_packet_reader
