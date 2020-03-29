@@ -8,6 +8,7 @@
 #include <memory>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -15,6 +16,7 @@
 #include <cartographer/mapping/trajectory_builder_interface.h>
 #include <cartographer/sensor/timed_point_cloud_data.h>
 
+using std::exception;
 using std::ifstream;
 using std::istreambuf_iterator;
 using std::logic_error;
@@ -124,7 +126,7 @@ int main(int argc, const char *argv[]) try {
   // TODO: read the IMU csv
 
   map_builder.FinishTrajectory(trajectory_id);
-} catch (const std::exception &e) {
+} catch (const exception &e) {
   std::cerr << "error: " << e.what() << '\n';
 
   return EXIT_FAILURE;
