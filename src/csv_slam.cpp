@@ -1,4 +1,5 @@
 #include "hit_packet_reader.h"
+#include "imu_reader.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -73,7 +74,11 @@ int main(int argc, const char *argv[]) try {
 
     return EXIT_FAILURE;
   } else if (argc < 3) {
-    std::cerr << "error: missing argument INPUT\n";
+    std::cerr << "error: missing argument VEL\n";
+
+    return EXIT_FAILURE;
+  } else if (argc < 4) {
+    std::cerr << "error: missing argument IMU\n";
 
     return EXIT_FAILURE;
   }
@@ -101,18 +106,45 @@ int main(int argc, const char *argv[]) try {
   assert(trajectory_builder_ptr);
   TrajectoryBuilderInterface &trajectory_builder = *trajectory_builder_ptr;
 
-  const char *const input_filename = argv[2];
-  ifstream input_file(input_filename);
+  const char *const vel_input_filename = argv[2];
+  ifstream vel_input_file(vel_input_filename);
 
-  if (!input_file.is_open()) {
-    std::cerr << "error: couldn't open '" << input_filename
+  if (!vel_input_file.is_open()) {
+    std::cerr << "error: couldn't open '" << vel_input_filename
               << "' for reading\n";
 
     return EXIT_FAILURE;
   }
 
   const Vector3f origin{};
-  HitPacketReader hit_packet_reader(input_file, origin);
+  HitPacketReader hit_packet_reader(vel_input_file, origin);
+
+  const char *const imu_input_filename = argv[3];
+  ifstream imu_input_file(imu_input_filename);
+
+  if (!imu_input_file.is_open()) {
+    std::cerr << "error: couldn't open '" << imu_input_filename
+              << "' for reading\n";
+
+    return EXIT_FAILURE;
+  }
+
+  ImuReader imu_reader(imu_input_file);
+
+  for (auto maybe_imu_data = imu_reader.deserialize_measurement();
+       maybe_imu_data; maybe_imu_data = imu_reader.deserialize_measurement()) {
+    auto &imu_data = *maybe_imu_data;
+
+    std::cout << "- time: " << imu_data.time.time_since_epoch().count()
+              << "\n  linear acceleration:\n    x: "
+              << imu_data.linear_acceleration.x()
+              << "\n    y: " << imu_data.linear_acceleration.y()
+              << "\n    z: " << imu_data.linear_acceleration.z()
+              << "\n  angular_velocity:\n    x: "
+              << imu_data.angular_velocity.x()
+              << "\n    y: " << imu_data.angular_velocity.y()
+              << "\n    z: " << imu_data.angular_velocity.z() << '\n';
+  }
 
   for (auto maybe_timed_point_cloud_data =
            hit_packet_reader.deserialize_packet();
@@ -122,8 +154,6 @@ int main(int argc, const char *argv[]) try {
 
     trajectory_builder.AddSensorData(vel_sensor_id, timed_point_cloud_data);
   }
-
-  // TODO: read the IMU csv
 
   map_builder.FinishTrajectory(trajectory_id);
 } catch (const exception &e) {
