@@ -1,17 +1,20 @@
 #include "hit_packet_reader.h"
 #include "imu_reader.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <exception>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <cartographer/mapping/map_builder.h>
 #include <cartographer/mapping/trajectory_builder_interface.h>
@@ -21,6 +24,7 @@ using std::exception;
 using std::ifstream;
 using std::istreambuf_iterator;
 using std::logic_error;
+using std::ofstream;
 using std::optional;
 using std::ostringstream;
 using std::pair;
@@ -29,10 +33,11 @@ using std::set;
 using std::string;
 using std::string_view;
 using std::unique_ptr;
+using std::vector;
 
 namespace chrono = std::chrono;
-using chrono::high_resolution_clock;
 using chrono::microseconds;
+using chrono::milliseconds;
 using chrono::nanoseconds;
 using chrono::seconds;
 
@@ -46,10 +51,16 @@ using mapping::MapBuilder;
 using SensorId = mapping::TrajectoryBuilderInterface::SensorId;
 using SensorType = SensorId::SensorType;
 using mapping::TrajectoryBuilderInterface;
+using mapping::TrajectoryNodePose;
 
 namespace sensor = cartographer::sensor;
 using sensor::TimedPointCloudData;
 
+namespace transform = cartographer::transform;
+using transform::Rigid3d;
+
+using Eigen::Quaterniond;
+using Eigen::Vector3d;
 using Eigen::Vector3f;
 
 class NullFileResolver : public FileResolver {
@@ -83,6 +94,10 @@ int main(int argc, const char *argv[]) try {
     std::cerr << "error: missing argument IMU\n";
 
     return EXIT_FAILURE;
+  } else if (argc < 5) {
+    std::cerr << "error: missing argument OUTPUT\n";
+
+    return EXIT_FAILURE;
   }
 
   const char *const config_filename = argv[1];
@@ -107,6 +122,7 @@ int main(int argc, const char *argv[]) try {
       map_builder.GetTrajectoryBuilder(trajectory_id);
   assert(trajectory_builder_ptr);
   TrajectoryBuilderInterface &trajectory_builder = *trajectory_builder_ptr;
+  const auto &pose_graph = *map_builder.pose_graph();
 
   const char *const vel_input_filename = argv[2];
   ifstream vel_input_file(vel_input_filename);
@@ -133,6 +149,22 @@ int main(int argc, const char *argv[]) try {
 
   ImuReader imu_reader(imu_input_file);
 
+  const char *const output_filename = argv[4];
+  ofstream output_file(output_filename);
+
+  if (!output_file.is_open()) {
+    std::cerr << "error: couldn't open '" << output_filename
+              << "' for writing\n";
+
+    return EXIT_FAILURE;
+  }
+
+  if (!(output_file << "utime,x,y,z,phi,theta,psi\n").flush()) {
+    std::cerr << "error: couldn't write to '" << output_filename << '\n';
+
+    return EXIT_FAILURE;
+  }
+
   auto maybe_imu_data = imu_reader.deserialize_measurement();
   auto maybe_timed_point_cloud_data = hit_packet_reader.deserialize_packet();
 
@@ -148,55 +180,80 @@ int main(int argc, const char *argv[]) try {
     simulation_start = maybe_timed_point_cloud_data->time;
   }
 
-  const auto start = high_resolution_clock::now();
-  auto last_print = start;
+  Time simulation_time;
+
+  const auto consume_imu = [&imu_reader, &imu_sensor_id, &trajectory_builder,
+                            &maybe_imu_data, &simulation_time] {
+    assert(maybe_imu_data);
+
+    trajectory_builder.AddSensorData(imu_sensor_id, *maybe_imu_data);
+    simulation_time = maybe_imu_data->time;
+    maybe_imu_data = imu_reader.deserialize_measurement();
+  };
+
+  const auto consume_vel = [&hit_packet_reader, &vel_sensor_id,
+                            &trajectory_builder, &maybe_timed_point_cloud_data,
+                            &simulation_time] {
+    assert(maybe_timed_point_cloud_data);
+
+    trajectory_builder.AddSensorData(vel_sensor_id,
+                                     *maybe_timed_point_cloud_data);
+    simulation_time = maybe_timed_point_cloud_data->time;
+    maybe_timed_point_cloud_data = hit_packet_reader.deserialize_packet();
+  };
+
+  optional<int> last_output_node_index;
+
   while (maybe_imu_data || maybe_timed_point_cloud_data) {
-    Time simulation_time;
-
     if (maybe_imu_data && maybe_timed_point_cloud_data) {
-      auto &imu_data = *maybe_imu_data;
-      auto &timed_point_cloud_data = *maybe_timed_point_cloud_data;
-
-      if (imu_data.time < timed_point_cloud_data.time) {
-        trajectory_builder.AddSensorData(imu_sensor_id, imu_data);
-        maybe_imu_data = imu_reader.deserialize_measurement();
-        simulation_time = imu_data.time;
+      if (maybe_imu_data->time < maybe_timed_point_cloud_data->time) {
+        consume_imu();
       } else {
-        trajectory_builder.AddSensorData(vel_sensor_id, timed_point_cloud_data);
-        maybe_timed_point_cloud_data = hit_packet_reader.deserialize_packet();
-        simulation_time = timed_point_cloud_data.time;
+        consume_vel();
       }
     } else if (maybe_imu_data) {
-      auto &imu_data = *maybe_imu_data;
-
-      trajectory_builder.AddSensorData(imu_sensor_id, imu_data);
-      maybe_imu_data = imu_reader.deserialize_measurement();
-      simulation_time = imu_data.time;
+      consume_imu();
     } else {
       assert(maybe_timed_point_cloud_data);
-      auto &timed_point_cloud_data = *maybe_timed_point_cloud_data;
 
-      trajectory_builder.AddSensorData(vel_sensor_id, timed_point_cloud_data);
-      maybe_timed_point_cloud_data = hit_packet_reader.deserialize_packet();
-      simulation_time = timed_point_cloud_data.time;
+      consume_vel();
     }
 
-    const auto now = high_resolution_clock::now();
-    const auto elapsed_since_last_print =
-        chrono::duration_cast<seconds>(now - last_print);
+    const auto poses = pose_graph.GetTrajectoryNodePoses();
+    const auto first = poses.BeginOfTrajectory(trajectory_id);
+    const auto last = poses.EndOfTrajectory(trajectory_id);
 
-    if (elapsed_since_last_print >= seconds(1)) {
-      last_print = now;
-      const nanoseconds elapsed = now - start;
-      const nanoseconds simulation_elapsed = simulation_time - simulation_start;
-      const auto speedup =
-          double(simulation_elapsed.count()) / double(elapsed.count());
+    if (first == last) {
+      continue;
+    }
 
-      std::cout << "processed "
-                << chrono::duration_cast<seconds>(simulation_elapsed).count()
-                << " seconds of data in "
-                << chrono::duration_cast<seconds>(elapsed).count()
-                << " seconds (" << speedup << "x real time)\n";
+    const auto &back = *std::prev(last);
+    const int back_node_index = back.id.node_index;
+
+    if (last_output_node_index && *last_output_node_index >= back_node_index) {
+      continue;
+    }
+
+    last_output_node_index = back_node_index;
+    const TrajectoryNodePose &pose = back.data;
+
+    const auto utime = chrono::duration_cast<microseconds>(
+        simulation_time.time_since_epoch() -
+        seconds(common::kUtsEpochOffsetFromUnixEpochInSeconds));
+
+    const Rigid3d &transform = pose.global_pose;
+    const Vector3d &translation = transform.translation();
+    const Quaterniond &rotation = transform.rotation();
+
+    const Vector3d rpy = rotation.toRotationMatrix().eulerAngles(2, 1, 0);
+
+    if (!(output_file << utime.count() << ',' << translation.x() << ','
+                      << translation.y() << ',' << translation.z() << ','
+                      << rpy.x() << ',' << rpy.y() << ',' << rpy.z() << '\n')
+             .flush()) {
+      std::cerr << "error: couldn't write to '" << output_filename << '\n';
+
+      return EXIT_FAILURE;
     }
   }
 

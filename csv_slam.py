@@ -21,6 +21,11 @@ def main():
     parser.add_argument(
         "ms25_data", metavar="IMU", help="CSV file containing MS25 IMU data",
     )
+    parser.add_argument(
+        "output_filename",
+        metavar="OUTPUT",
+        help="file to write CSV-formatted output trajectory",
+    )
 
     args = parser.parse_args()
 
@@ -31,6 +36,7 @@ def main():
             args.cartographer_config,
             args.velodyne_hits,
             args.ms25_data,
+            args.output_filename,
         ],
     )
 
