@@ -31,7 +31,9 @@ using std::string_view;
 using std::unique_ptr;
 
 namespace chrono = std::chrono;
+using chrono::high_resolution_clock;
 using chrono::microseconds;
+using chrono::nanoseconds;
 using chrono::seconds;
 
 namespace common = cartographer::common;
@@ -131,28 +133,71 @@ int main(int argc, const char *argv[]) try {
 
   ImuReader imu_reader(imu_input_file);
 
-  for (auto maybe_imu_data = imu_reader.deserialize_measurement();
-       maybe_imu_data; maybe_imu_data = imu_reader.deserialize_measurement()) {
-    auto &imu_data = *maybe_imu_data;
+  auto maybe_imu_data = imu_reader.deserialize_measurement();
+  auto maybe_timed_point_cloud_data = hit_packet_reader.deserialize_packet();
 
-    std::cout << "- time: " << imu_data.time.time_since_epoch().count()
-              << "\n  linear acceleration:\n    x: "
-              << imu_data.linear_acceleration.x()
-              << "\n    y: " << imu_data.linear_acceleration.y()
-              << "\n    z: " << imu_data.linear_acceleration.z()
-              << "\n  angular_velocity:\n    x: "
-              << imu_data.angular_velocity.x()
-              << "\n    y: " << imu_data.angular_velocity.y()
-              << "\n    z: " << imu_data.angular_velocity.z() << '\n';
+  Time simulation_start;
+
+  if (maybe_imu_data && maybe_timed_point_cloud_data) {
+    simulation_start =
+        std::min(maybe_imu_data->time, maybe_timed_point_cloud_data->time);
+  } else if (maybe_imu_data) {
+    simulation_start = maybe_imu_data->time;
+  } else {
+    assert(maybe_timed_point_cloud_data);
+    simulation_start = maybe_timed_point_cloud_data->time;
   }
 
-  for (auto maybe_timed_point_cloud_data =
-           hit_packet_reader.deserialize_packet();
-       maybe_timed_point_cloud_data;
-       maybe_timed_point_cloud_data = hit_packet_reader.deserialize_packet()) {
-    auto &timed_point_cloud_data = *maybe_timed_point_cloud_data;
+  const auto start = high_resolution_clock::now();
+  auto last_print = start;
+  while (maybe_imu_data || maybe_timed_point_cloud_data) {
+    Time simulation_time;
 
-    trajectory_builder.AddSensorData(vel_sensor_id, timed_point_cloud_data);
+    if (maybe_imu_data && maybe_timed_point_cloud_data) {
+      auto &imu_data = *maybe_imu_data;
+      auto &timed_point_cloud_data = *maybe_timed_point_cloud_data;
+
+      if (imu_data.time < timed_point_cloud_data.time) {
+        trajectory_builder.AddSensorData(imu_sensor_id, imu_data);
+        maybe_imu_data = imu_reader.deserialize_measurement();
+        simulation_time = imu_data.time;
+      } else {
+        trajectory_builder.AddSensorData(vel_sensor_id, timed_point_cloud_data);
+        maybe_timed_point_cloud_data = hit_packet_reader.deserialize_packet();
+        simulation_time = timed_point_cloud_data.time;
+      }
+    } else if (maybe_imu_data) {
+      auto &imu_data = *maybe_imu_data;
+
+      trajectory_builder.AddSensorData(imu_sensor_id, imu_data);
+      maybe_imu_data = imu_reader.deserialize_measurement();
+      simulation_time = imu_data.time;
+    } else {
+      assert(maybe_timed_point_cloud_data);
+      auto &timed_point_cloud_data = *maybe_timed_point_cloud_data;
+
+      trajectory_builder.AddSensorData(vel_sensor_id, timed_point_cloud_data);
+      maybe_timed_point_cloud_data = hit_packet_reader.deserialize_packet();
+      simulation_time = timed_point_cloud_data.time;
+    }
+
+    const auto now = high_resolution_clock::now();
+    const auto elapsed_since_last_print =
+        chrono::duration_cast<seconds>(now - last_print);
+
+    if (elapsed_since_last_print >= seconds(1)) {
+      last_print = now;
+      const nanoseconds elapsed = now - start;
+      const nanoseconds simulation_elapsed = simulation_time - simulation_start;
+      const auto speedup =
+          double(simulation_elapsed.count()) / double(elapsed.count());
+
+      std::cout << "processed "
+                << chrono::duration_cast<seconds>(simulation_elapsed).count()
+                << " seconds of data in "
+                << chrono::duration_cast<seconds>(elapsed).count()
+                << " seconds (" << speedup << "x real time)\n";
+    }
   }
 
   map_builder.FinishTrajectory(trajectory_id);
@@ -185,14 +230,16 @@ make_map_builder(const string &config_code, string_view vel_sensor_id,
   LuaParameterDictionary config(config_code,
                                 std::make_unique<NullFileResolver>());
 
-  const auto map_builder_options = mapping::CreateMapBuilderOptions(&config);
+  const auto map_builder_options = mapping::CreateMapBuilderOptions(
+      config.GetDictionary("map_builder").get());
   pair<unique_ptr<MapBuilder>, int> result = {
       std::make_unique<MapBuilder>(map_builder_options), 0};
   auto &[map_builder_ptr, trajectory_id] = result;
   MapBuilder &map_builder = *map_builder_ptr;
 
   const auto trajectory_builder_options =
-      mapping::CreateTrajectoryBuilderOptions(&config);
+      mapping::CreateTrajectoryBuilderOptions(
+          config.GetDictionary("trajectory_builder").get());
   trajectory_id = map_builder.AddTrajectoryBuilder(
       set<SensorId>{SensorId{SensorType::RANGE, string(vel_sensor_id)},
                     SensorId{SensorType::IMU, string(imu_sensor_id)}},
