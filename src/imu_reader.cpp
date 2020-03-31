@@ -1,5 +1,7 @@
 #include "imu_reader.h"
 
+#include "util.h"
+
 #include <cassert>
 #include <chrono>
 #include <cinttypes>
@@ -34,15 +36,19 @@ using sensor::ImuData;
 
 using Eigen::Vector3d;
 
-ImuReader::ImuReader(istream &is) noexcept : is_ptr_(&is) {}
+ImuReader::ImuReader(const char *filename)
+    : filename_(filename), file_(filename_) {
+  if (!file_.is_open()) {
+    throw runtime_error(
+        FORMAT("couldn't open \"" << filename_ << "\" for reading"));
+  }
+}
 
 optional<ImuData> ImuReader::deserialize_measurement() {
-  assert(is_ptr_);
-
   optional<ImuData> maybe_data;
 
   string line;
-  if (std::getline(*is_ptr_, line)) {
+  if (std::getline(file_, line)) {
     uint64_t utime_us;
     double Gx;
     double Gy;
@@ -58,18 +64,20 @@ optional<ImuData> ImuReader::deserialize_measurement() {
                     "%" SCNu64 ",%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf",
                     &utime_us, &Gx, &Gy, &Gz, &ax, &ay, &az, &omegax, &omegay,
                     &omegaz) != 10) {
-      throw runtime_error("ImuReader::deserialize_measurement: missing or "
-                          "malformed fields in CSV");
+      throw runtime_error(
+          FORMAT("missing or malformed fields in imu csv file \"" << filename_
+                                                                  << '"'));
     }
 
-    const microseconds since_unix_epoch(utime_us);
-    const Time time(since_unix_epoch +
-                    seconds(common::kUtsEpochOffsetFromUnixEpochInSeconds));
+    const microseconds utime(utime_us);
+    const Time uts = to_uts(utime);
 
     const Vector3d linear_acceleration = {ax, -ay, -az};
     const Vector3d angular_velocity = {omegax, -omegay, -omegaz};
 
-    maybe_data = ImuData{time, linear_acceleration, angular_velocity};
+    maybe_data = ImuData{uts, linear_acceleration, angular_velocity};
+  } else if (file_.bad()) {
+    throw runtime_error(FORMAT("couldn't read from \"" << filename_ << '"'));
   }
 
   return maybe_data;

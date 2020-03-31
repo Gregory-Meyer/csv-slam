@@ -8,8 +8,11 @@ find_package(Eigen3 REQUIRED)
 
 add_executable(csv-slam
     src/csv_slam.cpp
-    src/hit_packet_reader.cpp
+    src/cartographer_state.cpp
+    src/csv_writer.cpp
     src/imu_reader.cpp
+    src/util.cpp
+    src/velodyne_reader.cpp
 )
 target_compile_features(csv-slam PRIVATE cxx_std_17)
 set_target_properties(csv-slam PROPERTIES
