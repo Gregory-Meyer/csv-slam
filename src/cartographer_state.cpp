@@ -86,7 +86,7 @@ string NullFileResolver::GetFileContentOrDie(const string &) {
   throw logic_error(ERR_NULL_FILE_RESOLVER_NOT_IMPLEMENTED);
 }
 
-static string read_file(const char *filename) {
+string read_file(const char *filename) {
   assert(config_filename);
 
   ifstream file(filename);
