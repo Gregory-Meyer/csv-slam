@@ -24,6 +24,8 @@ namespace mapping = cartographer::mapping;
 using mapping::MapBuilder;
 using SensorId = mapping::TrajectoryBuilderInterface::SensorId;
 using SensorType = SensorId::SensorType;
+using LocalSlamResultCallback =
+    mapping::TrajectoryBuilderInterface::LocalSlamResultCallback;
 
 namespace {
 
@@ -38,8 +40,8 @@ string read_file(const char *config_filename);
 
 } // namespace
 
-CartographerState
-CartographerState::from_config_filename(const char *config_filename) {
+CartographerState CartographerState::from_config_filename_and_callback(
+    const char *config_filename, LocalSlamResultCallback callback) {
   static const string MAP_BUILDER = "map_builder";
   static const string TRAJECTORY_BUILDER = "trajectory_builder";
   static const string VEL_SENSOR_ID = "vel_sensor_id";
@@ -65,7 +67,7 @@ CartographerState::from_config_filename(const char *config_filename) {
   const int trajectory_id = map_builder.AddTrajectoryBuilder(
       set<SensorId>{SensorId{SensorType::RANGE, vel_sensor_id},
                     SensorId{SensorType::IMU, imu_sensor_id}},
-      trajectory_builder_options, {});
+      trajectory_builder_options, std::move(callback));
 
   return CartographerState{std::move(map_builder_ptr), trajectory_id,
                            std::move(vel_sensor_id), std::move(imu_sensor_id)};

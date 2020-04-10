@@ -5,12 +5,12 @@
 #include <string>
 
 #include <cartographer/common/time.h>
-#include <cartographer/mapping/trajectory_node.h>
+#include <cartographer/transform/rigid_transform.h>
 
 class CsvWriter {
 public:
   explicit CsvWriter(const char *filename);
-  void append(const cartographer::mapping::TrajectoryNodePose &pose,
+  void append(const cartographer::transform::Rigid3d &pose,
               cartographer::common::Time uts);
 
 private:

@@ -15,6 +15,8 @@ using std::chrono::microseconds;
 namespace transform = cartographer::transform;
 using transform::Rigid3d;
 
+using cartographer::common::Time;
+
 using Eigen::Quaterniond;
 using Eigen::Vector3d;
 using Eigen::Vector3f;
@@ -37,13 +39,11 @@ CsvWriter::CsvWriter(const char *filename)
   }
 }
 
-void CsvWriter::append(const cartographer::mapping::TrajectoryNodePose &pose,
-                       cartographer::common::Time uts) {
+void CsvWriter::append(const Rigid3d &pose, Time uts) {
   const microseconds utime = to_utime(uts);
 
-  const Rigid3d &transform = pose.global_pose;
-  const Vector3d &translation = transform.translation();
-  const Quaterniond &rotation = transform.rotation();
+  const Vector3d &translation = pose.translation();
+  const Quaterniond &rotation = pose.rotation();
 
   const Vector3d rpy = rotation.toRotationMatrix().eulerAngles(2, 1, 0);
 
