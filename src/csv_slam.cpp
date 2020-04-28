@@ -16,6 +16,7 @@
 #include "cartographer_state.h"
 #include "csv_writer.h"
 #include "imu_reader.h"
+#include "util.h"
 #include "velodyne_reader.h"
 
 #include <atomic>
@@ -28,6 +29,7 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <string>
 
 #include <cartographer/common/time.h>
 #include <cartographer/mapping/map_builder.h>
@@ -44,6 +46,7 @@ using std::exception;
 using std::mutex;
 using std::optional;
 using std::scoped_lock;
+using std::string;
 using std::unique_ptr;
 
 namespace chrono = std::chrono;
@@ -260,7 +263,14 @@ int main(int argc, const char *argv[]) try {
 
   std::signal(SIGINT, SIG_DFL);
 
+  const string state_filename = FORMAT(output_filename << ".proto");
+  map_builder.SerializeStateToFile(true, state_filename);
+  std::cout << "serialized unoptimized state to '" << state_filename << "'\n";
+
   map_builder.FinishTrajectory(trajectory_id);
+
+  map_builder.SerializeStateToFile(true, state_filename);
+  std::cout << "serialized optimized state to '" << state_filename << "'\n";
 } catch (const bad_alloc &) {
   std::cerr << "error: out of memory\n";
 
