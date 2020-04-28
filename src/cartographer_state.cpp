@@ -21,7 +21,9 @@
 #include <iterator>
 #include <set>
 #include <stdexcept>
+#include <vector>
 
+#include <cartographer/common/configuration_file_resolver.h>
 #include <cartographer/common/lua_parameter_dictionary.h>
 
 using std::ifstream;
@@ -30,9 +32,10 @@ using std::logic_error;
 using std::runtime_error;
 using std::set;
 using std::string;
+using std::vector;
 
 namespace common = cartographer::common;
-using common::FileResolver;
+using common::ConfigurationFileResolver;
 using common::LuaParameterDictionary;
 
 namespace mapping = cartographer::mapping;
@@ -43,13 +46,6 @@ using LocalSlamResultCallback =
     mapping::TrajectoryBuilderInterface::LocalSlamResultCallback;
 
 namespace {
-
-class NullFileResolver : public FileResolver {
-public:
-  virtual ~NullFileResolver() = default;
-  string GetFullPathOrDie(const string &) override;
-  string GetFileContentOrDie(const string &) override;
-};
 
 string read_file(const char *config_filename);
 
@@ -63,8 +59,9 @@ CartographerState CartographerState::from_config_filename_and_callback(
   static const string IMU_SENSOR_ID = "imu_sensor_id";
 
   const string config_code = read_file(config_filename);
-  LuaParameterDictionary config(config_code,
-                                std::make_unique<NullFileResolver>());
+  LuaParameterDictionary config(
+      config_code,
+      std::make_unique<ConfigurationFileResolver>(vector<string>{".."}));
 
   const auto map_builder_options =
       mapping::CreateMapBuilderOptions(config.GetDictionary(MAP_BUILDER).get());
@@ -89,17 +86,6 @@ CartographerState CartographerState::from_config_filename_and_callback(
 }
 
 namespace {
-
-constexpr auto &ERR_NULL_FILE_RESOLVER_NOT_IMPLEMENTED =
-    "NullFileResolver::GetFullPathOrDie: not implemented";
-
-string NullFileResolver::GetFullPathOrDie(const string &) {
-  throw logic_error(ERR_NULL_FILE_RESOLVER_NOT_IMPLEMENTED);
-}
-
-string NullFileResolver::GetFileContentOrDie(const string &) {
-  throw logic_error(ERR_NULL_FILE_RESOLVER_NOT_IMPLEMENTED);
-}
 
 string read_file(const char *filename) {
   assert(config_filename);
