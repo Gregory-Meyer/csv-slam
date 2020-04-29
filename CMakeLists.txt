@@ -21,6 +21,13 @@ find_package(Boost 1.58 REQUIRED COMPONENTS iostreams)
 find_package(cartographer REQUIRED)
 find_package(Eigen3 REQUIRED)
 
+option(CSV_SLAM_ALIGNMENT_WORKAROUND
+    "#define EIGEN_MAX_ALIGN_BYTES 16 when building csv-slam. \
+    This workaround is enabled by default because typical malloc(3) \
+    implementations return 16-byte aligned memory."
+    ON
+)
+
 add_executable(csv-slam
     src/cartographer_state.cpp
     src/csv_slam.cpp
@@ -43,3 +50,7 @@ target_link_libraries(csv-slam PRIVATE
     cartographer
     Eigen3::Eigen
 )
+
+if(CSV_SLAM_ALIGNMENT_WORKAROUND)
+    target_compile_definitions(csv-slam PRIVATE EIGEN_MAX_ALIGN_BYTES=16)
+endif()

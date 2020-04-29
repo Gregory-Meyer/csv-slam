@@ -15,34 +15,140 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+import multiprocessing
 import os
-from argparse import ArgumentParser
+import shlex
+import shutil
+import subprocess
+import sys
+from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
+from pathlib import Path
 
 
 def main():
     parser = ArgumentParser(
-        description="run Cartographer on Velodyne hits and IMU data"
+        description="run Cartographer on NCLT Velodyne hits, IMU data, and (optionally) odometry data",
+        formatter_class=ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument(
+
+    build_run_common_parser = ArgumentParser(
+        formatter_class=ArgumentDefaultsHelpFormatter, add_help=False
+    )
+
+    build_type_group = build_run_common_parser.add_mutually_exclusive_group()
+    build_type_group.add_argument(
+        "-d",
+        "--debug",
+        action="store_const",
+        const="Debug",
+        default="Debug",
+        dest="build_type",
+        help="pass -DCMAKE_BUILD_TYPE=Debug to cmake",
+    )
+    build_type_group.add_argument(
+        "-r",
+        "--release",
+        action="store_const",
+        const="Release",
+        default="Debug",
+        dest="build_type",
+        help="pass -DCMAKE_BUILD_TYPE=Release to cmake",
+    )
+    build_type_group.add_argument(
+        "-b",
+        "--build-type",
+        default="Debug",
+        dest="build_type",
+        help='passed to cmake as "-DCMAKE_BUILD_TYPE=$BUILD_TYPE"',
+    )
+
+    generator_group = build_run_common_parser.add_mutually_exclusive_group()
+    generator_group.add_argument(
+        "-m",
+        "--unix-makefiles",
+        action="store_const",
+        const="Unix Makefiles",
+        dest="generator",
+        help="pass '-G Unix Makefiles' to cmake",
+    )
+    generator_group.add_argument(
+        "-n",
+        "--ninja",
+        action="store_const",
+        const="Ninja",
+        dest="generator",
+        help="pass '-G Ninja' to cmake",
+    )
+    generator_group.add_argument(
+        "-g", "--generator", help='passed to cmake as "-G $GENERATOR"'
+    )
+
+    build_run_common_parser.add_argument(
+        "-c",
+        "--cmake-path",
+        default="cmake",
+        help="path to or name of the cmake executable to run",
+    )
+
+    build_run_common_parser.add_argument(
+        "-a",
+        "--cmake-args",
+        type=shlex.split,
+        default=[],
+        help="additional arguments passed directly to cmake. "
+        "split by shlex.split",
+    )
+
+    build_run_common_parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="print executed commands and pass stdout and stderr through",
+    )
+
+    subparsers = parser.add_subparsers(dest="subparser", required=True)
+
+    subparsers.add_parser(
+        "clean",
+        help="remove artifacts built by this script",
+        formatter_class=ArgumentDefaultsHelpFormatter,
+    )
+
+    subparsers.add_parser(
+        "build",
+        help="compile csv-slam without running it",
+        formatter_class=ArgumentDefaultsHelpFormatter,
+        parents=[build_run_common_parser],
+    )
+
+    run_subparser = subparsers.add_parser(
+        "run",
+        help="compile (if necessary) and run csv-slam",
+        formatter_class=ArgumentDefaultsHelpFormatter,
+        parents=[build_run_common_parser],
+    )
+
+    run_subparser.add_argument(
         "cartographer_config",
         metavar="CONFIG",
         help="Lua configuration file for Cartographer",
     )
-    parser.add_argument(
+    run_subparser.add_argument(
         "velodyne_hits",
         metavar="VEL",
         help="binary file containing Velodyne hits",
     )
-    parser.add_argument(
+    run_subparser.add_argument(
         "ms25_data", metavar="IMU", help="CSV file containing MS25 IMU data",
     )
-    parser.add_argument(
+    run_subparser.add_argument(
         "odometry_data",
         nargs="?",
         metavar="ODOMETRY",
         help="CSV file containing odometry data",
     )
-    parser.add_argument(
+    run_subparser.add_argument(
         "output_filename",
         metavar="OUTPUT",
         help="file to write CSV-formatted output trajectory",
@@ -50,29 +156,114 @@ def main():
 
     args = parser.parse_args()
 
-    if args.odometry_data is not None:
-        argv = [
-            "./csv-slam",
-            args.cartographer_config,
-            args.velodyne_hits,
-            args.ms25_data,
-            args.odometry_data,
-            args.output_filename,
-        ]
+    if args.subparser == "clean":
+        target_dir = Path("./target/")
+
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+
+        return
+
+    source_directory = Path(".")
+    build_directory = Path(f"./target/{args.build_type}")
+    build_directory.mkdir(parents=True, exist_ok=True)
+
+    cmake_args = [
+        args.cmake_path,
+        "-S",
+        str(source_directory),
+        "-B",
+        str(build_directory),
+        f"-DCMAKE_BUILD_TYPE={args.build_type}",
+    ]
+
+    if args.generator is not None:
+        cmake_args += ["-G", args.generator]
+
+    cmake_args += args.cmake_args
+
+    if args.verbose:
+        print(_shlex_join(cmake_args))
+        cmake_result = subprocess.run(
+            cmake_args, text=True, stdout=sys.stdout, stderr=sys.stderr
+        )
     else:
-        argv = (
-            [
-                "./csv-slam",
+        cmake_result = subprocess.run(
+            cmake_args, capture_output=True, text=True
+        )
+
+    if cmake_result.returncode != 0:
+        print(
+            f"error: {_shlex_join(cmake_args)} returned {cmake_result.returncode}",
+            file=sys.stderr,
+        )
+
+        if not args.verbose:
+            print("stdout:", file=sys.stderr)
+            print(cmake_result.stdout, file=sys.stderr)
+            print("stderr:", file=sys.stderr)
+            print(cmake_result.stderr, file=sys.stderr)
+
+        sys.exit(cmake_result.returncode)
+
+    cmake_build_args = [
+        args.cmake_path,
+        "--build",
+        str(build_directory),
+        "-j",
+        str(multiprocessing.cpu_count()),
+    ]
+
+    if args.verbose:
+        print(_shlex_join(cmake_build_args))
+        cmake_build_result = subprocess.run(
+            cmake_build_args, text=True, stdout=sys.stdout, stderr=sys.stderr
+        )
+    else:
+        cmake_build_result = subprocess.run(
+            cmake_build_args, capture_output=True, text=True
+        )
+
+    if cmake_build_result.returncode != 0:
+        print(
+            f"error: {_shlex_join(cmake_build_args)} returned {cmake_build_result.returncode}",
+            file=sys.stderr,
+        )
+
+        if not args.verbose:
+            print("stdout:", file=sys.stderr)
+            print(cmake_build_result.stdout, file=sys.stderr)
+            print("stderr:", file=sys.stderr)
+            print(cmake_build_result.stderr, file=sys.stderr)
+
+        sys.exit(cmake_build_result.returncode)
+
+    if args.subparser == "run":
+        csv_slam_executable = build_directory / "csv-slam"
+
+        if args.odometry_data is not None:
+            argv = [
+                csv_slam_executable,
+                args.cartographer_config,
+                args.velodyne_hits,
+                args.ms25_data,
+                args.odometry_data,
+                args.output_filename,
+            ]
+        else:
+            argv = [
+                csv_slam_executable,
                 args.cartographer_config,
                 args.velodyne_hits,
                 args.ms25_data,
                 args.output_filename,
-            ],
-        )
+            ]
 
-    os.execv(
-        "./csv-slam", argv,
-    )
+        os.execv(csv_slam_executable, argv)
+
+
+def _shlex_join(args):
+    return " ".join(shlex.quote(this_arg) for this_arg in args)
 
 
 if __name__ == "__main__":

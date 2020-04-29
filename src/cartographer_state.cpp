@@ -86,7 +86,7 @@ CartographerState CartographerState::from_config_filename_and_callback(
 namespace {
 
 string read_file(const char *filename) {
-  assert(config_filename);
+  assert(filename);
 
   ifstream file(filename);
 
