@@ -18,7 +18,7 @@
 include "pose_graph.lua"
 include "trajectory_builder.lua"
 
-NUM_THREADS = 16
+NUM_THREADS = 12
 
 POSE_GRAPH
   .constraint_builder
