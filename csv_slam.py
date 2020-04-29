@@ -164,102 +164,83 @@ def main():
 
         return
 
-    source_directory = Path(".")
-    build_directory = Path(f"./target/{args.build_type}")
-    build_directory.mkdir(parents=True, exist_ok=True)
+    if args.subparser in {"build", "run"}:
+        source_directory = Path(".")
+        build_directory = Path(f"./target/{args.build_type}")
+        build_directory.mkdir(parents=True, exist_ok=True)
 
-    cmake_args = [
-        args.cmake_path,
-        "-S",
-        str(source_directory),
-        "-B",
-        str(build_directory),
-        f"-DCMAKE_BUILD_TYPE={args.build_type}",
-    ]
+        cmake_args = [
+            args.cmake_path,
+            "-S",
+            str(source_directory),
+            "-B",
+            str(build_directory),
+            f"-DCMAKE_BUILD_TYPE={args.build_type}",
+        ]
 
-    if args.generator is not None:
-        cmake_args += ["-G", args.generator]
+        if args.generator is not None:
+            cmake_args += ["-G", args.generator]
 
-    cmake_args += args.cmake_args
+        cmake_args += args.cmake_args
 
-    if args.verbose:
-        print(_shlex_join(cmake_args))
-        cmake_result = subprocess.run(
-            cmake_args, text=True, stdout=sys.stdout, stderr=sys.stderr
+        _run(cmake_args)
+
+        cmake_build_args = [
+            args.cmake_path,
+            "--build",
+            str(build_directory),
+            "-j",
+            str(multiprocessing.cpu_count()),
+        ]
+
+        _run(cmake_build_args, verbose=args.verbose)
+
+        if args.subparser == "run":
+            csv_slam_executable = build_directory / "csv-slam"
+
+            if args.odometry_data is not None:
+                argv = [
+                    csv_slam_executable,
+                    args.cartographer_config,
+                    args.velodyne_hits,
+                    args.ms25_data,
+                    args.odometry_data,
+                    args.output_filename,
+                ]
+            else:
+                argv = [
+                    csv_slam_executable,
+                    args.cartographer_config,
+                    args.velodyne_hits,
+                    args.ms25_data,
+                    args.output_filename,
+                ]
+
+            os.execv(csv_slam_executable, argv)
+
+
+def _run(args, *, verbose=False):
+    if verbose:
+        print(_shlex_join(args))
+        result = subprocess.run(
+            args, text=True, stdout=sys.stdout, stderr=sys.stderr
         )
     else:
-        cmake_result = subprocess.run(
-            cmake_args, capture_output=True, text=True
-        )
+        result = subprocess.run(args, capture_output=True, text=True)
 
-    if cmake_result.returncode != 0:
+    if result.returncode != 0:
         print(
-            f"error: {_shlex_join(cmake_args)} returned {cmake_result.returncode}",
+            f"error: {_shlex_join(args)} returned {result.returncode}",
             file=sys.stderr,
         )
 
         if not args.verbose:
             print("stdout:", file=sys.stderr)
-            print(cmake_result.stdout, file=sys.stderr)
+            print(result.stdout, file=sys.stderr)
             print("stderr:", file=sys.stderr)
-            print(cmake_result.stderr, file=sys.stderr)
+            print(result.stderr, file=sys.stderr)
 
-        sys.exit(cmake_result.returncode)
-
-    cmake_build_args = [
-        args.cmake_path,
-        "--build",
-        str(build_directory),
-        "-j",
-        str(multiprocessing.cpu_count()),
-    ]
-
-    if args.verbose:
-        print(_shlex_join(cmake_build_args))
-        cmake_build_result = subprocess.run(
-            cmake_build_args, text=True, stdout=sys.stdout, stderr=sys.stderr
-        )
-    else:
-        cmake_build_result = subprocess.run(
-            cmake_build_args, capture_output=True, text=True
-        )
-
-    if cmake_build_result.returncode != 0:
-        print(
-            f"error: {_shlex_join(cmake_build_args)} returned {cmake_build_result.returncode}",
-            file=sys.stderr,
-        )
-
-        if not args.verbose:
-            print("stdout:", file=sys.stderr)
-            print(cmake_build_result.stdout, file=sys.stderr)
-            print("stderr:", file=sys.stderr)
-            print(cmake_build_result.stderr, file=sys.stderr)
-
-        sys.exit(cmake_build_result.returncode)
-
-    if args.subparser == "run":
-        csv_slam_executable = build_directory / "csv-slam"
-
-        if args.odometry_data is not None:
-            argv = [
-                csv_slam_executable,
-                args.cartographer_config,
-                args.velodyne_hits,
-                args.ms25_data,
-                args.odometry_data,
-                args.output_filename,
-            ]
-        else:
-            argv = [
-                csv_slam_executable,
-                args.cartographer_config,
-                args.velodyne_hits,
-                args.ms25_data,
-                args.output_filename,
-            ]
-
-        os.execv(csv_slam_executable, argv)
+        sys.exit(result.returncode)
 
 
 def _shlex_join(args):
