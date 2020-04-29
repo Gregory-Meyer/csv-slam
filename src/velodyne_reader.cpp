@@ -50,22 +50,23 @@ using chrono::microseconds;
 
 namespace endian = boost::endian;
 
-namespace common = cartographer::common;
-using common::Time;
+using cartographer::common::Time;
 
-namespace sensor = cartographer::sensor;
-using sensor::PointCloudWithIntensities;
-using sensor::TimedPointCloudData;
-using sensor::TimedRangefinderPoint;
+using cartographer::sensor::PointCloudWithIntensities;
+using cartographer::sensor::TimedPointCloudData;
+using cartographer::sensor::TimedRangefinderPoint;
 
+using cartographer::transform::Rigid3d;
+
+using Eigen::Vector3d;
 using Eigen::Vector3f;
 
 namespace {
 
 class Impl {
 public:
-  Impl(std::string_view filename, ifstream &file,
-       const Eigen::Vector3f &origin) noexcept;
+  Impl(string_view filename, ifstream &file,
+       const Rigid3d &vel_to_imu) noexcept;
   optional<TimedPointCloudData> deserialize_packet();
 
 private:
@@ -77,15 +78,15 @@ private:
   runtime_error err_unreadable() const;
   runtime_error err_incomplete() const;
 
-  std::string_view filename_;
+  string_view filename_;
   ifstream &file_;
-  const Eigen::Vector3f &origin_;
+  const Rigid3d &vel_to_imu_;
 };
 
 } // namespace
 
-VelodyneReader::VelodyneReader(const char *filename, const Vector3f &origin)
-    : filename_(filename), file_(filename_), origin_(origin) {
+VelodyneReader::VelodyneReader(const char *filename, const Rigid3d &vel_to_imu)
+    : filename_(filename), file_(filename_), vel_to_imu_(vel_to_imu) {
   if (!file_.is_open()) {
     throw runtime_error(
         FORMAT("couldn't open \"" << filename_ << "\" for reading"));
@@ -95,7 +96,7 @@ VelodyneReader::VelodyneReader(const char *filename, const Vector3f &origin)
 optional<TimedPointCloudData> VelodyneReader::deserialize_packet() {
   assert(file_.is_open());
 
-  return Impl(filename_, file_, origin_).deserialize_packet();
+  return Impl(filename_, file_, vel_to_imu_).deserialize_packet();
 }
 
 namespace {
@@ -105,9 +106,9 @@ using MagicBuffer = array<uint8_t, 8>;
 ostream &operator<<(ostream &os, const MagicBuffer &magic);
 istream &operator>>(istream &is, MagicBuffer &magic);
 
-Impl::Impl(std::string_view filename, ifstream &file,
-           const Eigen::Vector3f &origin) noexcept
-    : filename_(filename), file_(file), origin_(origin) {}
+Impl::Impl(string_view filename, ifstream &file,
+           const Rigid3d &vel_to_imu) noexcept
+    : filename_(filename), file_(file), vel_to_imu_(vel_to_imu) {}
 
 optional<TimedPointCloudData> Impl::deserialize_packet() {
   static_assert(sizeof(uint8_t) == 1,
@@ -160,11 +161,9 @@ optional<TimedPointCloudData> Impl::deserialize_packet() {
     static constexpr uint8_t MAX_ID = 31;
     static constexpr streamsize INTENSITY_SIZE = 1;
 
-    // velodyne coordinate frame is x-right, y-back, z-down
-    // convert to ENU coordinate frame: x-forward, y-left, z-up
-    const float y = -deserialize_position();
-    const float x = -deserialize_position();
-    const float z = -deserialize_position();
+    const float x = deserialize_position();
+    const float y = deserialize_position();
+    const float z = deserialize_position();
     ignore(INTENSITY_SIZE);
     const auto id = deserialize_integer<uint8_t>();
 
@@ -174,11 +173,13 @@ optional<TimedPointCloudData> Impl::deserialize_packet() {
                                  << MAX_ID));
     }
 
-    const TimedRangefinderPoint point = {Vector3f{x, y, z}, 0.0f};
+    const TimedRangefinderPoint point = {
+        (vel_to_imu_.rotation() * Vector3d{x, y, z}).cast<float>(), 0.0f};
     ranges.push_back(point);
   }
 
-  return TimedPointCloudData{time, origin_, std::move(ranges)};
+  return TimedPointCloudData{time, vel_to_imu_.translation().cast<float>(),
+                             std::move(ranges)};
 }
 
 ostream &operator<<(ostream &os, const MagicBuffer &magic) {
@@ -190,7 +191,7 @@ ostream &operator<<(ostream &os, const MagicBuffer &magic) {
   for (auto iter = magic.cbegin() + 1; iter != magic.cend(); ++iter) {
     if (!(os << ", 0x" << std::setfill('0') << std::setw(2) << std::right
              << std::hex << int(*iter))) {
-      break;
+      return os;
     }
   }
 

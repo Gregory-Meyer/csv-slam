@@ -22,10 +22,13 @@ find_package(cartographer REQUIRED)
 find_package(Eigen3 REQUIRED)
 
 add_executable(csv-slam
-    src/csv_slam.cpp
     src/cartographer_state.cpp
+    src/csv_slam.cpp
     src/csv_writer.cpp
     src/imu_reader.cpp
+    src/odometry_reader.cpp
+    src/sensor_callback.cpp
+    src/sensor_callback_queue.cpp
     src/util.cpp
     src/velodyne_reader.cpp
 )

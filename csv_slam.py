@@ -37,6 +37,12 @@ def main():
         "ms25_data", metavar="IMU", help="CSV file containing MS25 IMU data",
     )
     parser.add_argument(
+        "odometry_data",
+        nargs="?",
+        metavar="ODOMETRY",
+        help="CSV file containing odometry data",
+    )
+    parser.add_argument(
         "output_filename",
         metavar="OUTPUT",
         help="file to write CSV-formatted output trajectory",
@@ -44,15 +50,28 @@ def main():
 
     args = parser.parse_args()
 
-    os.execv(
-        "./csv-slam",
-        [
+    if args.odometry_data is not None:
+        argv = [
             "./csv-slam",
             args.cartographer_config,
             args.velodyne_hits,
             args.ms25_data,
+            args.odometry_data,
             args.output_filename,
-        ],
+        ]
+    else:
+        argv = (
+            [
+                "./csv-slam",
+                args.cartographer_config,
+                args.velodyne_hits,
+                args.ms25_data,
+                args.output_filename,
+            ],
+        )
+
+    os.execv(
+        "./csv-slam", argv,
     )
 
 

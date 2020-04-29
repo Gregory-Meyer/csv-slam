@@ -57,6 +57,4 @@ MAP_BUILDER = {
 options = {
   map_builder = MAP_BUILDER,
   trajectory_builder = TRAJECTORY_BUILDER,
-  vel_sensor_id = "vel",
-  imu_sensor_id = "imu",
 }

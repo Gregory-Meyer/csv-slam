@@ -13,23 +13,27 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-#ifndef STARTUP_H
-#define STARTUP_H
+#ifndef ODOMETRY_READER_H
+#define ODOMETRY_READER_H
 
-#include <memory>
+#include <fstream>
+#include <optional>
 #include <string>
 
-#include <cartographer/mapping/map_builder.h>
-#include <cartographer/mapping/trajectory_builder_interface.h>
+#include <cartographer/sensor/odometry_data.h>
+#include <cartographer/transform/rigid_transform.h>
 
-struct CartographerState {
-  std::unique_ptr<cartographer::mapping::MapBuilder> map_builder_ptr;
-  int trajectory_id;
+class OdometryReader {
+public:
+  OdometryReader(const char *filename,
+                 const cartographer::transform::Rigid3d &odom_to_imu);
 
-  static CartographerState from_config_filename_and_callback(
-      const char *config_filename,
-      cartographer::mapping::TrajectoryBuilderInterface::LocalSlamResultCallback
-          callback);
+  std::optional<cartographer::sensor::OdometryData> deserialize_measurement();
+
+private:
+  std::string filename_;
+  std::ifstream file_;
+  cartographer::transform::Rigid3d odom_to_imu_;
 };
 
 #endif

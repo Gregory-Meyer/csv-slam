@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-#include "imu_reader.h"
+#include "odometry_reader.h"
 
 #include "util.h"
 
@@ -47,50 +47,52 @@ namespace common = cartographer::common;
 using common::Time;
 
 namespace sensor = cartographer::sensor;
-using sensor::ImuData;
+using sensor::OdometryData;
 
+using cartographer::transform::Rigid3d;
+
+using Eigen::AngleAxisd;
+using Eigen::Quaterniond;
 using Eigen::Vector3d;
 
-ImuReader::ImuReader(const char *filename)
-    : filename_(filename), file_(filename_) {
+OdometryReader::OdometryReader(const char *filename, const Rigid3d &odom_to_imu)
+    : filename_(filename), file_(filename_), odom_to_imu_(odom_to_imu) {
   if (!file_.is_open()) {
     throw runtime_error(
         FORMAT("couldn't open \"" << filename_ << "\" for reading"));
   }
 }
 
-optional<ImuData> ImuReader::deserialize_measurement() {
-  optional<ImuData> maybe_data;
+optional<OdometryData> OdometryReader::deserialize_measurement() {
+  optional<OdometryData> maybe_data;
 
   string line;
   if (std::getline(file_, line)) {
     uint64_t utime_us;
-    double Gx;
-    double Gy;
-    double Gz;
-    double ax;
-    double ay;
-    double az;
-    double omegax;
-    double omegay;
-    double omegaz;
+    double x;
+    double y;
+    double z;
+    double phi;   // roll around x-axis
+    double theta; // pitch around y-axis
+    double psi;   // yaw around z-axis
 
-    if (std::sscanf(line.c_str(),
-                    "%" SCNu64 ",%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf",
-                    &utime_us, &Gx, &Gy, &Gz, &ax, &ay, &az, &omegax, &omegay,
-                    &omegaz) != 10) {
+    if (std::sscanf(line.c_str(), "%" SCNu64 ",%lf,%lf,%lf,%lf,%lf,%lf",
+                    &utime_us, &x, &y, &z, &phi, &theta, &psi) != 7) {
       throw runtime_error(
-          FORMAT("missing or malformed fields in imu csv file \"" << filename_
-                                                                  << '"'));
+          FORMAT("missing or malformed fields in odometry csv file \""
+                 << filename_ << '"'));
     }
 
     const microseconds utime(utime_us);
     const Time uts = to_uts(utime);
 
-    const Vector3d linear_acceleration = {ax, ay, az};
-    const Vector3d angular_velocity = {omegax, omegay, omegaz};
+    const Rigid3d world_to_odom(
+        Vector3d(x, y, z), Quaterniond(AngleAxisd(psi, Vector3d::UnitZ()) *
+                                       AngleAxisd(theta, Vector3d::UnitY()) *
+                                       AngleAxisd(phi, Vector3d::UnitX())));
+    const Rigid3d world_to_imu = world_to_odom * odom_to_imu_;
 
-    maybe_data = ImuData{uts, linear_acceleration, angular_velocity};
+    maybe_data = OdometryData{uts, world_to_imu};
   } else if (file_.bad()) {
     throw runtime_error(FORMAT("couldn't read from \"" << filename_ << '"'));
   }

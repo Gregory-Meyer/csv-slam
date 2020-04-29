@@ -55,8 +55,6 @@ CartographerState CartographerState::from_config_filename_and_callback(
     const char *config_filename, LocalSlamResultCallback callback) {
   static const string MAP_BUILDER = "map_builder";
   static const string TRAJECTORY_BUILDER = "trajectory_builder";
-  static const string VEL_SENSOR_ID = "vel_sensor_id";
-  static const string IMU_SENSOR_ID = "imu_sensor_id";
 
   const string config_code = read_file(config_filename);
   LuaParameterDictionary config(
@@ -73,16 +71,16 @@ CartographerState CartographerState::from_config_filename_and_callback(
       mapping::CreateTrajectoryBuilderOptions(
           config.GetDictionary(TRAJECTORY_BUILDER).get());
 
-  string vel_sensor_id = config.GetString(VEL_SENSOR_ID);
-  string imu_sensor_id = config.GetString(IMU_SENSOR_ID);
-
   const int trajectory_id = map_builder.AddTrajectoryBuilder(
-      set<SensorId>{SensorId{SensorType::RANGE, vel_sensor_id},
-                    SensorId{SensorType::IMU, imu_sensor_id}},
+      set<SensorId>{SensorId{SensorType::RANGE, "vel"},
+                    SensorId{SensorType::IMU, "imu"},
+                    SensorId{SensorType::ODOMETRY, "odom"}},
       trajectory_builder_options, std::move(callback));
 
-  return CartographerState{std::move(map_builder_ptr), trajectory_id,
-                           std::move(vel_sensor_id), std::move(imu_sensor_id)};
+  return CartographerState{
+      std::move(map_builder_ptr),
+      trajectory_id,
+  };
 }
 
 namespace {

@@ -16,6 +16,9 @@
 #include "cartographer_state.h"
 #include "csv_writer.h"
 #include "imu_reader.h"
+#include "odometry_reader.h"
+#include "sensor_callback.h"
+#include "sensor_callback_queue.h"
 #include "util.h"
 #include "velodyne_reader.h"
 
@@ -24,11 +27,13 @@
 #include <csignal>
 #include <cstdlib>
 #include <exception>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <new>
 #include <optional>
+#include <queue>
 #include <string>
 
 #include <cartographer/common/time.h>
@@ -43,8 +48,11 @@
 using std::atomic_bool;
 using std::bad_alloc;
 using std::exception;
+using std::function;
+using std::greater;
 using std::mutex;
 using std::optional;
+using std::priority_queue;
 using std::scoped_lock;
 using std::string;
 using std::unique_ptr;
@@ -69,10 +77,16 @@ using LocalSlamResultCallback =
 using mapping::PoseExtrapolator;
 using mapping::TrajectoryNodePose;
 
+using cartographer::sensor::ImuData;
+using cartographer::sensor::OdometryData;
 using cartographer::sensor::RangeData;
+using cartographer::sensor::TimedPointCloudData;
 
 using cartographer::transform::Rigid3d;
 
+using Eigen::AngleAxisd;
+using Eigen::Quaterniond;
+using Eigen::Vector3d;
 using Eigen::Vector3f;
 
 struct LocalSlamData {
@@ -80,9 +94,22 @@ struct LocalSlamData {
   Rigid3d pose;
 };
 
+constexpr double operator""_deg(long double degrees) {
+  return double(degrees * EIGEN_PI / 180);
+}
+
+Rigid3d xyz_rpy(double x, double y, double z, double phi, double theta,
+                double psi) noexcept;
 extern "C" void sigint_handler(int) noexcept;
 
 atomic_bool keep_running = true;
+
+const Rigid3d BODY_TO_VEL =
+    xyz_rpy(0.002, -0.004, -0.957, 0.807_deg, 0.166_deg, -90.703_deg);
+const Rigid3d BODY_TO_IMU =
+    xyz_rpy(-0.11, -0.18, -0.71, 0.0_deg, 0.0_deg, 0.0_deg);
+const Rigid3d VEL_TO_BODY = BODY_TO_VEL.inverse();
+const Rigid3d VEL_TO_IMU = VEL_TO_BODY * BODY_TO_IMU;
 
 int main(int argc, const char *argv[]) try {
   google::InitGoogleLogging(argv[0]);
@@ -109,7 +136,7 @@ int main(int argc, const char *argv[]) try {
   optional<LocalSlamData> maybe_local_slam_data;
 
   const char *const config_filename = argv[1];
-  const auto [map_builder_ptr, trajectory_id, vel_sensor_id, imu_sensor_id] =
+  const auto [map_builder_ptr, trajectory_id] =
       CartographerState::from_config_filename_and_callback(
           config_filename, [&local_slam_mutex, &maybe_local_slam_data](
                                int, Time time, Rigid3d pose, RangeData,
@@ -134,77 +161,58 @@ int main(int argc, const char *argv[]) try {
       pose_graph.GetTrajectoryData()[trajectory_id].gravity_constant);
 
   const char *const vel_input_filename = argv[2];
-  const Vector3f origin = {0.0f, 0.0f, 0.0f};
-  VelodyneReader vel_reader(vel_input_filename, origin);
-  auto maybe_vel_data = vel_reader.deserialize_packet();
-
-  if (!maybe_vel_data) {
-    std::cerr << "error: velodyne binary file \"" << vel_input_filename
-              << "\" is empty\n";
-
-    return EXIT_FAILURE;
-  }
+  VelodyneReader vel_reader(vel_input_filename, VEL_TO_IMU);
 
   const char *const imu_input_filename = argv[3];
   ImuReader imu_reader(imu_input_filename);
-  auto maybe_imu_data = imu_reader.deserialize_measurement();
 
-  if (!maybe_imu_data) {
-    std::cerr << "error: imu csv file \"" << vel_input_filename
-              << "\" is empty\n";
+  optional<OdometryReader> maybe_odom_reader =
+      [argc, argv]() -> optional<OdometryReader> {
+    if (argc > 5) {
+      return OdometryReader(argv[4], BODY_TO_IMU);
+    } else {
+      return std::nullopt;
+    }
+  }();
+
+  const char *const output_filename = [argc, argv] {
+    if (argc > 5) {
+      return argv[5];
+    } else {
+      return argv[4];
+    }
+  }();
+
+  CsvWriter csv_writer(output_filename);
+
+  sensor_callback_queue::Args scq_args;
+  scq_args.trajectory_builder_ptr = &trajectory_builder;
+  scq_args.pose_extrapolator_ptr = &pose_extrapolator;
+  scq_args.vel_ptr = &vel_reader;
+  scq_args.imu_ptr = &imu_reader;
+
+  if (maybe_odom_reader) {
+    scq_args.odom_ptr = &*maybe_odom_reader;
+  }
+
+  SensorCallbackQueue callbacks(std::move(scq_args));
+
+  if (callbacks.empty()) {
+    std::cerr << "error: all sensor input files are empty\n";
 
     return EXIT_FAILURE;
   }
 
-  const char *const output_filename = argv[4];
-  CsvWriter csv_writer(output_filename);
-
-  const Time simulation_start =
-      std::min(maybe_imu_data->time, maybe_vel_data->time);
+  const Time simulation_start = *callbacks.pop();
   Time simulation_time;
-
-  const auto pop_imu = [&imu_reader, &imu_sensor_id = imu_sensor_id,
-                        &trajectory_builder, &pose_extrapolator,
-                        &maybe_imu_data, &simulation_time] {
-    assert(maybe_imu_data);
-
-    trajectory_builder.AddSensorData(imu_sensor_id, *maybe_imu_data);
-    pose_extrapolator.AddImuData(*maybe_imu_data);
-    simulation_time = maybe_imu_data->time;
-    maybe_imu_data = imu_reader.deserialize_measurement();
-  };
-
-  const auto pop_vel = [&vel_reader, &vel_sensor_id = vel_sensor_id,
-                        &trajectory_builder, &maybe_vel_data,
-                        &simulation_time] {
-    assert(maybe_vel_data);
-
-    trajectory_builder.AddSensorData(vel_sensor_id, *maybe_vel_data);
-    simulation_time = maybe_vel_data->time;
-    maybe_vel_data = vel_reader.deserialize_packet();
-  };
 
   std::signal(SIGINT, sigint_handler);
 
   Time last_pose_output_time = simulation_start;
   const high_resolution_clock::time_point start = high_resolution_clock::now();
   high_resolution_clock::time_point last_print = start;
-  while (keep_running.load(std::memory_order_relaxed) &&
-         (maybe_imu_data || maybe_vel_data)) {
-    if (maybe_imu_data && maybe_vel_data) {
-      if (maybe_imu_data->time < maybe_vel_data->time) {
-        pop_imu();
-      } else {
-        pop_vel();
-      }
-    } else if (maybe_vel_data) {
-      pop_vel();
-    } else {
-      assert(maybe_imu_data);
-
-      pop_imu();
-    }
-
+  while (keep_running.load(std::memory_order_relaxed) && !callbacks.empty()) {
+    simulation_time = *callbacks.pop();
     const Duration simulation_elapsed = simulation_time - simulation_start;
 
     const high_resolution_clock::time_point now = high_resolution_clock::now();
@@ -283,6 +291,16 @@ int main(int argc, const char *argv[]) try {
   std::cerr << "error: unknown exception caught\n";
 
   return EXIT_FAILURE;
+}
+
+Rigid3d xyz_rpy(double x, double y, double z, double phi, double theta,
+                double psi) noexcept {
+  const Vector3d transform(x, y, z);
+  const Quaterniond rotation(AngleAxisd(psi, Vector3d::UnitZ()) *
+                             AngleAxisd(theta, Vector3d::UnitY()) *
+                             AngleAxisd(phi, Vector3d::UnitX()));
+
+  return Rigid3d(transform, rotation);
 }
 
 extern "C" void sigint_handler(int) noexcept {
