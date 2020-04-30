@@ -264,7 +264,7 @@ int main(int argc, const char *argv[]) try {
 
   std::signal(SIGINT, SIG_DFL);
 
-  const string state_filename = FORMAT(output_filename << ".proto");
+  const string state_filename = FORMAT(output_filename << ".pbstream");
   map_builder.SerializeStateToFile(true, state_filename);
   std::cout << "serialized unoptimized state to '" << state_filename << "'\n";
 
