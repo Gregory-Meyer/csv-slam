@@ -12,6 +12,10 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
+-- This file has been modified from its original form to:
+--   * fix the z-axis in 3d space at 0
+--   * only optimize for yaw rotation, and not pitch or roll, when scanmatching
+
 POSE_GRAPH = {
   optimize_every_n_nodes = 90,
   constraint_builder = {
@@ -51,7 +55,7 @@ POSE_GRAPH = {
       occupied_space_weight_1 = 30.,
       translation_weight = 10.,
       rotation_weight = 1.,
-      only_optimize_yaw = false,
+      only_optimize_yaw = true,
       ceres_solver_options = {
         use_nonmonotonic_steps = false,
         max_num_iterations = 10,
@@ -73,7 +77,7 @@ POSE_GRAPH = {
     fixed_frame_pose_rotation_weight = 1e2,
     log_solver_summary = false,
     use_online_imu_extrinsics_in_3d = true,
-    fix_z_in_3d = false,
+    fix_z_in_3d = true,
     ceres_solver_options = {
       use_nonmonotonic_steps = false,
       max_num_iterations = 50,

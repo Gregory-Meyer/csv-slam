@@ -14,9 +14,11 @@
 
 -- This file has been modified from its original form to:
 --   * increase the maximum range to 80m, to match the Velodyne HDL-32E
---   * increase the number of accumulated range data packets to 180, to match
---     the number of packets emitted during one rotation of a Velodyne HDL-32E
+--   * increase the number of accumulated range data packets to 90, to match
+--     the number of packets emitted in a half rotation of a Velodyne HDL-32E
 --   * increase the minimum range to 1m, to match "trajectory_builder_3d.lua"
+--   * invert min_ and max_z, because the NCLT dataset is provided in the neu
+--     coordinate frame
 
 include "trajectory_builder_3d.lua"
 
@@ -24,10 +26,10 @@ TRAJECTORY_BUILDER_2D = {
   use_imu_data = true,
   min_range = MIN_RANGE,
   max_range = MAX_RANGE,
-  min_z = -0.8,
-  max_z = 2.,
+  min_z = -2.,
+  max_z = 0.8,
   missing_data_ray_length = 5.,
-  num_accumulated_range_data = 180,
+  num_accumulated_range_data = 90,
   voxel_filter_size = 0.025,
 
   adaptive_voxel_filter = {

@@ -14,8 +14,9 @@
 
 -- This file has been modified from its original form to:
 --   * increase the maximum range to 80m, to match the Velodyne HDL-32E
---   * increase the number of accumulated range data packets to 180, to match
---     the number of packets emitted during one rotation of a Velodyne HDL-32E
+--   * increase the number of accumulated range data packets to 90, to match
+--     the number of packets emitted in a half rotation of a Velodyne HDL-32E
+--   * only optimize for yaw rotation when scanmatching
 
 MIN_RANGE = 1.
 MAX_RANGE = 80.
@@ -23,7 +24,7 @@ MAX_RANGE = 80.
 TRAJECTORY_BUILDER_3D = {
   min_range = MIN_RANGE,
   max_range = MAX_RANGE,
-  num_accumulated_range_data = 180,
+  num_accumulated_range_data = 90,
   voxel_filter_size = 0.15,
 
   high_resolution_adaptive_voxel_filter = {
@@ -51,7 +52,7 @@ TRAJECTORY_BUILDER_3D = {
     occupied_space_weight_1 = 6.,
     translation_weight = 5.,
     rotation_weight = 4e2,
-    only_optimize_yaw = false,
+    only_optimize_yaw = true,
     ceres_solver_options = {
       use_nonmonotonic_steps = false,
       max_num_iterations = 12,
