@@ -2,6 +2,12 @@
 
 csv-slam is a C++17 command-line interface to [Google Cartographer](https://opensource.google/projects/cartographer) for use with the [North Campus Long Term (NCLT)](http://robots.engin.umich.edu/nclt/) dataset. [CMake](https://cmake.org/) 3.11 and a C++17 compiler are required, as are the Google Cartographer, [Boost](https://www.boost.org/) 1.58 or newer, including Boost.Iostreams, and [Eigen](http://eigen.tuxfamily.org/index.php?title=Main_Page) libraries.
 
+## Example Output
+
+![x-y axis view of output of csv-slam](media/xy.png)
+
+![x-z axis view of output of csv-slam](media/xz.png)
+
 ## Usage
 
 Input is provided to csv-slam in the form of CSV and binary files as downloaded from the NCLT dataset wensite. Output is emitted as a CSV file in the same format as the odometry and ground truth files from the NCLT dataset, but using radians for angular position. csv-slam is intended to be used through the [`csv_slam.py`](csv_slam.py) entrypoint. For usage information, pass the `-h,--help` option to `csv_slam.py`. See example output below:
