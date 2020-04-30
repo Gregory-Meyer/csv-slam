@@ -153,6 +153,13 @@ def main():
         metavar="OUTPUT",
         help="file to write CSV-formatted output trajectory",
     )
+    run_subparser.add_argument(
+        "-p",
+        "--prefix",
+        default=[],
+        type=shlex.split,
+        help="prefix before the executable. split by shlex.split",
+    )
 
     args = parser.parse_args()
 
@@ -196,7 +203,7 @@ def main():
         _run(cmake_build_args, verbose=args.verbose)
 
         if args.subparser == "run":
-            csv_slam_executable = build_directory / "csv-slam"
+            csv_slam_executable = str(build_directory / "csv-slam")
 
             if args.odometry_data is not None:
                 argv = [
@@ -216,7 +223,9 @@ def main():
                     args.output_filename,
                 ]
 
-            os.execv(csv_slam_executable, argv)
+            argv = args.prefix + argv
+
+            os.execv(shutil.which(argv[0]), argv)
 
 
 def _run(args, *, verbose=False):
