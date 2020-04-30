@@ -234,7 +234,7 @@ def _run(args, *, verbose=False):
             file=sys.stderr,
         )
 
-        if not args.verbose:
+        if not verbose:
             print("stdout:", file=sys.stderr)
             print(result.stdout, file=sys.stderr)
             print("stderr:", file=sys.stderr)
