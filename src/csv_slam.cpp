@@ -84,11 +84,6 @@ using cartographer::sensor::TimedPointCloudData;
 
 using cartographer::transform::Rigid3d;
 
-using Eigen::AngleAxisd;
-using Eigen::Quaterniond;
-using Eigen::Vector3d;
-using Eigen::Vector3f;
-
 struct LocalSlamData {
   Time time;
   Rigid3d pose;
@@ -98,8 +93,6 @@ constexpr double operator""_deg(long double degrees) {
   return double(degrees * EIGEN_PI / 180);
 }
 
-Rigid3d xyz_rpy(double x, double y, double z, double phi, double theta,
-                double psi) noexcept;
 extern "C" void sigint_handler(int) noexcept;
 
 atomic_bool keep_running = true;
@@ -109,7 +102,7 @@ const Rigid3d BODY_TO_VEL =
 const Rigid3d BODY_TO_IMU =
     xyz_rpy(-0.11, -0.18, -0.71, 0.0_deg, 0.0_deg, 0.0_deg);
 const Rigid3d VEL_TO_BODY = BODY_TO_VEL.inverse();
-const Rigid3d VEL_TO_IMU = VEL_TO_BODY * BODY_TO_IMU;
+const Rigid3d VEL_TO_IMU = BODY_TO_IMU * VEL_TO_BODY;
 
 int main(int argc, const char *argv[]) try {
   google::InitGoogleLogging(argv[0]);
@@ -291,16 +284,6 @@ int main(int argc, const char *argv[]) try {
   std::cerr << "error: unknown exception caught\n";
 
   return EXIT_FAILURE;
-}
-
-Rigid3d xyz_rpy(double x, double y, double z, double phi, double theta,
-                double psi) noexcept {
-  const Vector3d transform(x, y, z);
-  const Quaterniond rotation(AngleAxisd(psi, Vector3d::UnitZ()) *
-                             AngleAxisd(theta, Vector3d::UnitY()) *
-                             AngleAxisd(phi, Vector3d::UnitX()));
-
-  return Rigid3d(transform, rotation);
 }
 
 extern "C" void sigint_handler(int) noexcept {

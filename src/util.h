@@ -20,6 +20,7 @@
 #include <sstream>
 
 #include <cartographer/common/time.h>
+#include <cartographer/transform/rigid_transform.h>
 
 #define FORMAT(...)                                                            \
   (static_cast<std::ostringstream &>(std::ostringstream().flush()              \
@@ -32,5 +33,8 @@
 
 cartographer::common::Time to_uts(std::chrono::microseconds utime);
 std::chrono::microseconds to_utime(cartographer::common::Time uts);
+cartographer::transform::Rigid3d xyz_rpy(double x, double y, double z,
+                                         double phi, double theta,
+                                         double psi) noexcept;
 
 #endif

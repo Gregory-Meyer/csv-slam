@@ -60,11 +60,12 @@ void CsvWriter::append(const Rigid3d &pose, Time uts) {
   const Vector3d &translation = pose.translation();
   const Quaterniond &rotation = pose.rotation();
 
-  const Vector3d rpy = rotation.toRotationMatrix().eulerAngles(2, 1, 0);
+  const Vector3d rpy = rotation.toRotationMatrix().eulerAngles(0, 1, 2);
 
   if (!(file_ << utime.count() << ',' << translation.x() << ','
               << translation.y() << ',' << translation.z() << ',' << rpy.x()
-              << ',' << rpy.y() << ',' << rpy.z() << '\n')) {
+              << ',' << rpy.y() << ',' << rpy.z() << '\n')
+           .flush()) {
     throw err_unwritable(filename_);
   }
 }

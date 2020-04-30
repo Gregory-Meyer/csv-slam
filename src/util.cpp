@@ -15,12 +15,20 @@
 
 #include "util.h"
 
+#include <Eigen/Core>
+
 namespace chrono = std::chrono;
 using chrono::microseconds;
 using chrono::seconds;
 
 namespace common = cartographer::common;
 using common::Time;
+
+using cartographer::transform::Rigid3d;
+
+using Eigen::AngleAxisd;
+using Eigen::Quaterniond;
+using Eigen::Vector3d;
 
 Time to_uts(microseconds utime) {
   return Time(utime + seconds(common::kUtsEpochOffsetFromUnixEpochInSeconds));
@@ -30,4 +38,14 @@ microseconds to_utime(Time uts) {
   return chrono::duration_cast<microseconds>(
       uts.time_since_epoch() -
       seconds(common::kUtsEpochOffsetFromUnixEpochInSeconds));
+}
+
+Rigid3d xyz_rpy(double x, double y, double z, double phi, double theta,
+                double psi) noexcept {
+  const Vector3d transform(x, y, z);
+  const Quaterniond rotation(AngleAxisd(phi, Vector3d::UnitX()) *
+                             AngleAxisd(theta, Vector3d::UnitY()) *
+                             AngleAxisd(psi, Vector3d::UnitZ()));
+
+  return Rigid3d(transform, rotation);
 }

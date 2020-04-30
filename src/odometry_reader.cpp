@@ -72,12 +72,12 @@ optional<OdometryData> OdometryReader::deserialize_measurement() {
     double x;
     double y;
     double z;
-    double phi;   // roll around x-axis
-    double theta; // pitch around y-axis
-    double psi;   // yaw around z-axis
+    double roll;  // roll around x-axis
+    double pitch; // pitch around y-axis
+    double yaw;   // yaw around z-axis
 
     if (std::sscanf(line.c_str(), "%" SCNu64 ",%lf,%lf,%lf,%lf,%lf,%lf",
-                    &utime_us, &x, &y, &z, &phi, &theta, &psi) != 7) {
+                    &utime_us, &x, &y, &z, &roll, &pitch, &yaw) != 7) {
       throw runtime_error(
           FORMAT("missing or malformed fields in odometry csv file \""
                  << filename_ << '"'));
@@ -86,11 +86,8 @@ optional<OdometryData> OdometryReader::deserialize_measurement() {
     const microseconds utime(utime_us);
     const Time uts = to_uts(utime);
 
-    const Rigid3d world_to_odom(
-        Vector3d(x, y, z), Quaterniond(AngleAxisd(psi, Vector3d::UnitZ()) *
-                                       AngleAxisd(theta, Vector3d::UnitY()) *
-                                       AngleAxisd(phi, Vector3d::UnitX())));
-    const Rigid3d world_to_imu = world_to_odom * odom_to_imu_;
+    const Rigid3d world_to_odom = xyz_rpy(x, y, z, roll, pitch, yaw);
+    const Rigid3d world_to_imu = odom_to_imu_ * world_to_odom;
 
     maybe_data = OdometryData{uts, world_to_imu};
   } else if (file_.bad()) {
