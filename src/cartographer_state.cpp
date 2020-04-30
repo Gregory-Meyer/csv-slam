@@ -59,7 +59,7 @@ CartographerState CartographerState::from_config_filename_and_callback(
   const string config_code = read_file(config_filename);
   LuaParameterDictionary config(
       config_code,
-      std::make_unique<ConfigurationFileResolver>(vector<string>{".."}));
+      std::make_unique<ConfigurationFileResolver>(vector<string>{"."}));
 
   const auto map_builder_options =
       mapping::CreateMapBuilderOptions(config.GetDictionary(MAP_BUILDER).get());
